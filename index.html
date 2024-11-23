@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cross-Browser Video Chat</title>
+  <style>
+    video {
+      width: 45%;
+      margin: 10px;
+    }
+    #videos {
+      display: flex;
+      justify-content: center;
+    }
+  </style>
+  <script src="https://webrtc.github.io/adapter/adapter-latest.js"></script>
+</head>
+<body>
+  <h1>Live Video Chat</h1>
+  <div id="videos">
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
+  </div>
+  
+  <script>
+const signalingServer = new WebSocket('ws://localhost:8080');
+let localStream, peerConnection;
+
+const servers = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' }
+  ]
+};
+
+navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+  .then(stream => {
+    localStream = stream;
+    document.getElementById('localVideo').srcObject = stream;
+
+    peerConnection = new RTCPeerConnection(servers);
+
+    // Add local tracks
+    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+    // Handle remote stream
+    peerConnection.ontrack = event => {
+      document.getElementById('remoteVideo').srcObject = event.streams[0];
+    };
+
+    // Handle ICE candidates
+    peerConnection.onicecandidate = event => {
+      if (event.candidate) {
+        signalingServer.send(JSON.stringify({ type: 'candidate', candidate: event.candidate }));
+      }
+    };
+  })
+  .catch(error => console.error('Error accessing media devices:', error));
+
+signalingServer.onmessage = async message => {
+  const data = JSON.parse(message.data);
+
+  switch (data.type) {
+    case 'offer':
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      signalingServer.send(JSON.stringify({ type: 'answer', answer }));
+      break;
+
+    case 'answer':
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
+      break;
+
+    case 'candidate':
+      if (data.candidate) {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } catch (e) {
+          console.error('Error adding received ICE candidate:', e);
+        }
+      }
+      break;
+
+    default:
+      console.warn('Unknown message type:', data.type);
+  }
+};
+
+signalingServer.onopen = async () => {
+  const offer = await peerConnection.createOffer();
+  await peerConnection.setLocalDescription(offer);
+  signalingServer.send(JSON.stringify({ type: 'offer', offer }));
+};
+
+  </script>
+</body>
+</html>
